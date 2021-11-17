@@ -1,7 +1,7 @@
 /*!
- * @file Adafruit_MAX31855.cpp
+ * @file MAX31855.cpp
  *
- * @mainpage Adafruit MAX31855 Thermocouple Breakout Driver
+ * @mainpage Adafruit MAX31855 Thermocouple Breakout Driver (ported to rpi pico)
  *
  * @section intro_sec Introduction
  *
@@ -26,6 +26,7 @@
  * @section author Author
  *
  * Written by Limor Fried/Ladyada for Adafruit Industries.
+ * Ported by endeavor85
  *
  * @section license License
  *
@@ -33,49 +34,30 @@
  *
  */
 
-#include "Adafruit_MAX31855.h"
-#ifdef __AVR
-#include <avr/pgmspace.h>
-#elif defined(ESP8266)
-#include <pgmspace.h>
-#endif
+#include "max31855.h"
 
 #include <stdlib.h>
 
-/**************************************************************************/
-/*!
-    @brief  Instantiates a new Adafruit_MAX31855 class using software SPI.
+#include "pico/binary_info.h"
 
-    @param _sclk The pin to use for SPI Serial Clock.
-    @param _cs The pin to use for SPI Chip Select.
-    @param _miso The pin to use for SPI Master In Slave Out.
-*/
-/**************************************************************************/
-Adafruit_MAX31855::Adafruit_MAX31855(int8_t _sclk, int8_t _cs, int8_t _miso)
-    : spi_dev(_cs, _sclk, _miso, -1, 1000000) {}
+MAX31855::MAX31855(spi_inst_t* _spi_port, const uint spi_sck, const uint spi_rx, const uint8_t _spi_cs) :
+  spi_port(_spi_port),
+  spi_cs(_spi_cs)
+{
+  gpio_set_function(spi_sck, GPIO_FUNC_SPI);
+  gpio_set_function(spi_rx, GPIO_FUNC_SPI);
 
-/**************************************************************************/
-/*!
-    @brief  Instantiates a new Adafruit_MAX31855 class using hardware SPI.
+  // Chip select is active-low, so we'll initialise it to a driven-high state
+  gpio_init(spi_cs);
+  gpio_set_dir(spi_cs, GPIO_OUT);
+  gpio_put(spi_cs, 1);
+  // Make the CS pin available to picotool
+  bi_decl(bi_1pin_with_name(spi_cs, "SPI CS"));
 
-    @param _cs The pin to use for SPI Chip Select.
-    @param _spi which spi buss to use.
-*/
-/**************************************************************************/
-Adafruit_MAX31855::Adafruit_MAX31855(int8_t _cs, SPIClass *_spi)
-    : spi_dev(_cs, 1000000, SPI_BITORDER_MSBFIRST, SPI_MODE0, _spi) {}
-
-/**************************************************************************/
-/*!
-    @brief  Setup the HW
-
-    @return True if the device was successfully initialized, otherwise false.
-*/
-/**************************************************************************/
-bool Adafruit_MAX31855::begin(void) {
-  initialized = spi_dev.begin();
-
-  return initialized;
+  // 5MHz SPI baud rate
+  spi_init(spi_port, 5000000);
+  
+  cs_deselect(spi_cs);
 }
 
 /**************************************************************************/
@@ -85,7 +67,7 @@ bool Adafruit_MAX31855::begin(void) {
     @return The internal temperature in degrees Celsius.
 */
 /**************************************************************************/
-double Adafruit_MAX31855::readInternal(void) {
+double MAX31855::readInternal(void) {
   uint32_t v;
 
   v = spiread32();
@@ -113,7 +95,7 @@ double Adafruit_MAX31855::readInternal(void) {
     @return The thermocouple temperature in degrees Celsius.
 */
 /**************************************************************************/
-double Adafruit_MAX31855::readCelsius(void) {
+double MAX31855::readCelsius(void) {
 
   int32_t v;
 
@@ -131,7 +113,7 @@ double Adafruit_MAX31855::readCelsius(void) {
 
   if (v & 0x7) {
     // uh oh, a serious problem!
-    return NAN;
+    return (0.0F/0.0F);
   }
 
   if (v & 0x80000000) {
@@ -157,7 +139,7 @@ double Adafruit_MAX31855::readCelsius(void) {
     @return The error state.
 */
 /**************************************************************************/
-uint8_t Adafruit_MAX31855::readError() { return spiread32() & 0x7; }
+uint8_t MAX31855::readError() { return spiread32() & 0x7; }
 
 /**************************************************************************/
 /*!
@@ -166,7 +148,7 @@ uint8_t Adafruit_MAX31855::readError() { return spiread32() & 0x7; }
     @return The thermocouple temperature in degrees Fahrenheit.
 */
 /**************************************************************************/
-double Adafruit_MAX31855::readFahrenheit(void) {
+double MAX31855::readFahrenheit(void) {
   float f = readCelsius();
   f *= 9.0;
   f /= 5.0;
@@ -181,16 +163,13 @@ double Adafruit_MAX31855::readFahrenheit(void) {
     @return The raw 32 bit value read.
 */
 /**************************************************************************/
-uint32_t Adafruit_MAX31855::spiread32(void) {
+uint32_t MAX31855::spiread32(void) {
   uint32_t d = 0;
   uint8_t buf[4];
 
-  // backcompatibility!
-  if (!initialized) {
-    begin();
-  }
-
-  spi_dev.read(buf, 4);
+  cs_select(spi_cs);
+  spi_read_blocking(spi_port, 0, buf, 4);
+  cs_deselect(spi_cs);
 
   d = buf[0];
   d <<= 8;
@@ -199,8 +178,6 @@ uint32_t Adafruit_MAX31855::spiread32(void) {
   d |= buf[2];
   d <<= 8;
   d |= buf[3];
-
-  // Serial.println(d, HEX);
 
   return d;
 }
